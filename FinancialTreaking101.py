@@ -104,19 +104,19 @@ def init_supabase():
         supabase.table('expenses').select('id').limit(1).execute()
         return supabase
     except Exception as e:
-        st.error(f"Failed to connect to Supabase: {e}")
+        st.error(f"Failed to connect to Supabase: {e}. Please check network connectivity or Supabase URL/Key.")
         return None
 
 supabase = init_supabase()
 if supabase is None:
-    st.warning("Using mock data due to database connection issues.")
+    st.warning("Using mock data due to database connection issues. Some features may be limited.")
 
 # Initialize Gemini API
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error(f"Failed to initialize Gemini API: {e}")
+    st.error(f"Failed to initialize Gemini API: {e}. Please verify the API key.")
     gemini_model = None
 
 # Constants
@@ -286,8 +286,10 @@ with st.sidebar:
             df = pd.read_csv(uploaded_file)
             st.success("File uploaded successfully!")
             st.write("Preview:", df.head())
-            if analyze_and_store_data(df, current_user_id):
+            if supabase and analyze_and_store_data(df, current_user_id):
                 st.session_state['data_uploaded'] = True
+            elif not supabase:
+                st.warning("Cannot store data due to database issues.")
         except Exception as e:
             st.error(f"Error reading file: {e}")
     
@@ -359,6 +361,8 @@ if current_page == "Dashboard":
                 st.info("No recent transactions.")
         except Exception as e:
             st.error(f"Error fetching recent transactions: {e}")
+    else:
+        st.warning("Recent transactions unavailable due to database issues.")
 
 elif current_page == "Expenses":
     st.markdown("<div class='section-header'>💸 Expenses</div>", unsafe_allow_html=True)
