@@ -12,7 +12,7 @@ from fpdf import FPDF
 from scipy.optimize import minimize
 from supabase import create_client, Client
 
-# Set page config as the FIRST Streamlit command
+# Set page config as the FIRST Streamlit command (only once!)
 st.set_page_config(
     page_title="ProFinance Manager",
     layout="wide",
@@ -51,13 +51,6 @@ def create_tables_if_needed():
 
 # Create tables on startup
 create_tables_if_needed()
-
-# Page configuration
-st.set_page_config(
-    page_title="ProFinance Manager",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Constants
 DEFAULT_EXPENSE_CATEGORIES = ["Housing", "Food", "Transportation", "Utilities", "Healthcare", 
@@ -433,8 +426,6 @@ elif current_page == "Expenses":
     except Exception as e:
         st.error(f"Error loading expenses: {e}")
 
-# Continue with other pages (Income, Budgets, Goals, etc.) following the same pattern...
-
 elif current_page == "Income":
     st.title("💵 Income Tracking")
     
@@ -510,8 +501,6 @@ elif current_page == "Income":
     
     except Exception as e:
         st.error(f"Error loading income: {e}")
-
-# Continue with other pages following the same pattern...
 
 elif current_page == "Financial Workbench":
     st.title("🧮 Financial Workbench")
