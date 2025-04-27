@@ -12,6 +12,13 @@ from fpdf import FPDF
 from scipy.optimize import minimize
 from supabase import create_client, Client
 
+# Set page config as the FIRST Streamlit command
+st.set_page_config(
+    page_title="ProFinance Manager",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # Supabase Configuration
 SUPABASE_URL = "https://hugjvlpvxqvnkuzfyacw.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Z2p2bHB2eHF2bmt1emZ5YWN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ0Nzg4NDIsImV4cCI6MjA2MDA1NDg0Mn0.BDe2Wrr74P-pkR0XF6Sfgheq6k4Z0LvidHV-7JiDC30"
