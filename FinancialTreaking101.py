@@ -143,11 +143,11 @@ def initialize_services():
     try:
         SUPABASE_URL = st.secrets["supabase"]["https://qkeyjzxnhnosdlxtwsbm.supabase.co"]
         SUPABASE_KEY = st.secrets["supabase"]["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrZXlqenhuaG5vc2RseHR3c2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4OTAzNzIsImV4cCI6MjA1NzQ2NjM3Mn0.DsxE9-sTfF0hYaSitoq8uExpk7rusH0NlxqXLGy-G2U"]
-        GEMINI_API_KEY = st.secrets["gemini"]["GEMINI_API_KEY"]
+        GEMINI_API_KEY = st.secrets["gemini"]["AIzaSyCgRp8oPIET2Y2tmOiC2PNhKjiV9vNxywU"]
         st.session_state.using_secrets = True
     except (KeyError, FileNotFoundError):
-        SUPABASE_URL = os.getenv("SUPABASE_URL")
-        SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+        SUPABASE_URL = os.getenv("https://qkeyjzxnhnosdlxtwsbm.supabase.co")
+        SUPABASE_KEY = os.getenv("SUPABASE_KEY","eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrZXlqenhuaG5vc2RseHR3c2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4OTAzNzIsImV4cCI6MjA1NzQ2NjM3Mn0.DsxE9-sTfF0hYaSitoq8uExpk7rusH0NlxqXLGy-G2U")
         GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCgRp8oPIET2Y2tmOiC2PNhKjiV9vNxywU")
         st.session_state.using_secrets = False
         if not SUPABASE_URL or not SUPABASE_KEY:
