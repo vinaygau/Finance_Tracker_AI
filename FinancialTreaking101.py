@@ -140,9 +140,9 @@ st.markdown(custom_css, unsafe_allow_html=True)
 # Initialize Supabase and Gemini with table creation
 def initialize_services():
     try:
-        SUPABASE_URL = st.secrets["SUPABASE_URL"]
-        SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-        GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+        SUPABASE_URL = st.secrets["https://qkeyjzxnhnosdlxtwsbm.supabase.co"]
+        SUPABASE_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrZXlqenhuaG5vc2RseHR3c2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4OTAzNzIsImV4cCI6MjA1NzQ2NjM3Mn0.DsxE9-sTfF0hYaSitoq8uExpk7rusH0NlxqXLGy-G2U"]
+        GEMINI_API_KEY = st.secrets["AIzaSyCgRp8oPIET2Y2tmOiC2PNhKjiV9vNxywU"]
         st.session_state.using_secrets = True
     except (KeyError, FileNotFoundError):
         SUPABASE_URL = os.getenv("SUPABASE_URL")
