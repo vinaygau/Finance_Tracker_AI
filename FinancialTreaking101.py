@@ -91,6 +91,7 @@ custom_css = """
         padding: 10px;
         border-radius: 8px;
         margin-bottom: 10px;
+        color: blue;  /* Changed font color to blue for Gemini LLM output */
     }
     .info-box {
         background-color: #e6f3ff;
@@ -149,9 +150,9 @@ def initialize_services():
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             # Test connection by querying a minimal select (avoids table existence dependency)
             response = supabase.table('expenses').select('id', count='exact').execute()
-            if response.error:
+            if response.data is None:
                 # If 'expenses' table doesn't exist, create a fallback connection test
-                if response.error.get('code') == '42P01':  # Relation does not exist
+                if hasattr(response, 'error') and response.error and response.error.get('code') == '42P01':  # Relation does not exist
                     st.warning("Table 'expenses' not found. Creating mock connection for testing.")
                     st.session_state.supabase_connected = False
                     st.session_state.mock_data = True
@@ -173,10 +174,7 @@ def initialize_services():
         genai.configure(api_key=GEMINI_API_KEY)
         gemini_model = genai.GenerativeModel('gemini-1.5-pro')  # Using pro model for better reasoning
         # Test the model with a simple prompt
-        test_response = gemini_model.generate_content("Test")
-        if test_response.error:
-            st.error(f"Gemini API test failed: {test_response.error}")
-            gemini_model = None
+        gemini_model.generate_content("Test")  # Simply try the call; exception will be caught if it fails
         st.session_state.gemini_initialized = True
     except Exception as e:
         st.error(f"Failed to initialize Gemini API: {str(e)}")
@@ -300,10 +298,10 @@ def calculate_financial_metrics(expenses_df, income_df):
     metrics = {
         'total_expenses': expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
         'total_income': income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
-        'fixed_expenses': expenses_df[expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
-        'variable_expenses': expenses_df[~expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
-        'fixed_income': income_df[income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
-        'variable_income': income_df[~income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
+        'fixed_expenses': expenses_df[expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and 'fixed' in expenses_df.columns and not expenses_df.empty else 0,
+        'variable_expenses': expenses_df[~expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and 'fixed' in expenses_df.columns and not expenses_df.empty else 0,
+        'fixed_income': income_df[income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and 'fixed' in income_df.columns and not income_df.empty else 0,
+        'variable_income': income_df[~income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and 'fixed' in income_df.columns and not income_df.empty else 0,
     }
     metrics['net_income'] = metrics['total_income'] - metrics['total_expenses']
     metrics['savings_rate'] = (metrics['net_income'] / metrics['total_income'] * 100) if metrics['total_income'] > 0 else 0
@@ -389,8 +387,6 @@ def get_financial_advice(user_data, query):
         - Use a professional yet approachable tone.
         """
         response = gemini_model.generate_content(prompt)
-        if response.error:
-            return f"Error generating advice: {response.error}"
         return response.text
     except Exception as e:
         st.error(f"Error getting financial advice: {str(e)}")
@@ -481,7 +477,7 @@ if current_page == "Dashboard":
     st.subheader("Quick Insights")
     if metrics['savings_rate'] < 10: st.warning("Your savings rate is low. Consider reducing discretionary spending or increasing income.")
     if metrics['expense_ratio'] > 80: st.warning("High expense ratio! More than 80% of your income is going to expenses.")
-    if metrics['fixed_expenses'] / metrics['total_income'] > 0.5: st.warning("Your fixed expenses are high (>50% of income). Look for ways to reduce recurring costs.")
+    if metrics['fixed_expenses'] / metrics['total_income'] > 0.5 and metrics['total_income'] > 0: st.warning("Your fixed expenses are high (>50% of income). Look for ways to reduce recurring costs.")
     st.subheader("Recent Transactions")
     if not expenses_df.empty or not income_df.empty:
         recent_expenses = expenses_df.sort_values('date', ascending=False).head(3) if 'date' in expenses_df.columns else pd.DataFrame()
@@ -525,7 +521,7 @@ elif current_page == "Expenses":
     if st.session_state.mock_data and expenses_df.empty: expenses_df = generate_mock_data('expenses', rows=15)
     if not expenses_df.empty and 'amount' in expenses_df.columns:
         total_spent = expenses_df['amount'].sum()
-        avg_daily = total_spent / ((end_date - start_date).days + 1)
+        avg_daily = total_spent / ((end_date - start_date).days + 1) if (end_date - start_date).days + 1 > 0 else 0
         st.markdown(f"**Total Spent:** ${total_spent:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(expenses_df)}")
         tab1, tab2, tab3 = st.tabs(["📊 Overview", "📅 Trends", "🔍 Details"])
         with tab1:
@@ -584,7 +580,7 @@ elif current_page == "Income":
     if st.session_state.mock_data and income_df.empty: income_df = generate_mock_data('income', rows=15)
     if not income_df.empty and 'amount' in income_df.columns:
         total_income = income_df['amount'].sum()
-        avg_daily = total_income / ((end_date - start_date).days + 1)
+        avg_daily = total_income / ((end_date - start_date).days + 1) if (end_date - start_date).days + 1 > 0 else 0
         st.markdown(f"**Total Income:** ${total_income:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(income_df)}")
         tab1, tab2 = st.tabs(["📊 Overview", "📅 Trends"])
         with tab1:
@@ -622,10 +618,12 @@ elif current_page == "Budgets":
     st.subheader("Budget Tracking")
     budgets_df = get_financial_data('budgets', current_user_id)
     if st.session_state.mock_data and budgets_df.empty: budgets_df = generate_mock_data('budgets', rows=5)
-    if not budgets_df.empty and 'amount' in budgets_df.columns and 'category' in budgets_df.columns:
+    if not budgets_df.empty and 'amount' in budgets_df.columns and 'category' in budgets_df.columns and 'start_date' in budgets_df.columns:
         for _, budget in budgets_df.iterrows():
             expenses_df = get_financial_data('expenses', current_user_id, (datetime.strptime(budget['start_date'], '%Y-%m-%d'), datetime.now()))
-            spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum() if 'amount' in expenses_df.columns and 'category' in expenses_df.columns else 0
+            spent = expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0
+            if 'category' in expenses_df.columns and not expenses_df.empty:
+                spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum()
             progress = (spent / budget['amount'] * 100) if budget['amount'] > 0 else 0
             st.markdown(f"<div class='metric-box'>", unsafe_allow_html=True)
             st.metric(f"{budget['category']} ({budget['period']})", f"${spent:,.2f} / ${budget['amount']:,.2f}", f"{progress:.1f}%")
@@ -706,8 +704,8 @@ elif current_page == "Reports":
         start_date = col1.date_input("Start Date", datetime.now() - timedelta(days=30))
         end_date = col2.date_input("End Date", datetime.now())
     else:
-        start_date = datetime.now().replace(day=1).strftime('%Y-%m-%d') if report_type == "Monthly" else datetime.now().replace(month=1, day=1).strftime('%Y-%m-%d')
-        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = datetime.now().replace(day=1) if report_type == "Monthly" else datetime.now().replace(month=1, day=1)
+        end_date = datetime.now()
     if st.button("Generate Report"):
         if st.session_state.supabase_connected:
             pdf_data = generate_pdf_report(report_type, current_user_id, start_date, end_date)
@@ -812,11 +810,14 @@ elif current_page == "Financial Advisor":
         "total_income": income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
         "expense_categories": expenses_df['category'].unique().tolist() if 'category' in expenses_df.columns and not expenses_df.empty else [],
         "income_sources": income_df['source'].unique().tolist() if 'source' in income_df.columns and not income_df.empty else [],
-        "savings_rate": ((income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0) - 
-                         (expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0)) / 
-                        (income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 1) * 100 if 
-                        (income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0) > 0 else 0
+        "savings_rate": 0  # Default value
     }
+    
+    # Calculate savings rate only if columns exist and DataFrames are not empty
+    if 'amount' in income_df.columns and 'amount' in expenses_df.columns and not income_df.empty and not expenses_df.empty:
+        total_income = income_df['amount'].sum()
+        total_expenses = expenses_df['amount'].sum()
+        user_data['savings_rate'] = ((total_income - total_expenses) / total_income * 100) if total_income > 0 else 0
     
     # Display financial snapshot
     with st.expander("📊 Your Financial Snapshot", expanded=True):
