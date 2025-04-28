@@ -139,15 +139,12 @@ st.markdown(custom_css, unsafe_allow_html=True)
 
 # Initialize Supabase and Gemini with table creation
 def initialize_services():
-    """Initialize Supabase and Gemini services with proper error handling and table creation"""
-    # Try to get secrets from Streamlit
     try:
         SUPABASE_URL = st.secrets["SUPABASE_URL"]
         SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         st.session_state.using_secrets = True
     except (KeyError, FileNotFoundError):
-        # Fallback to environment variables for local development
         SUPABASE_URL = os.getenv("SUPABASE_URL")
         SUPABASE_KEY = os.getenv("SUPABASE_KEY")
         GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -158,17 +155,12 @@ def initialize_services():
             st.session_state.mock_data = True
             return None, None
 
-    # Initialize Supabase with retry logic
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def init_supabase():
         try:
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            
-            # Check if tables exist, create if they don't
             try:
-                # Test connection by querying a table
                 response = supabase.table('expenses').select('id', count='exact').limit(1).execute()
-                
                 if hasattr(response, 'error') and response.error:
                     if 'relation "public.expenses" does not exist' in str(response.error):
                         st.warning("Required tables not found. Creating database schema...")
@@ -178,14 +170,11 @@ def initialize_services():
                     else:
                         st.error(f"Supabase connection error: {response.error}")
                         return None
-                
                 st.session_state.supabase_connected = True
                 return supabase
-                
             except Exception as e:
                 st.error(f"Error checking tables: {str(e)}")
                 return None
-                
         except Exception as e:
             st.error(f"Failed to connect to Supabase: {str(e)}")
             st.session_state.supabase_connected = False
@@ -193,9 +182,7 @@ def initialize_services():
             return None
 
     def create_tables(supabase):
-        """Create required tables in Supabase"""
         try:
-            # Create expenses table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.expenses (
@@ -211,8 +198,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Create income table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.income (
@@ -227,8 +212,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Create budgets table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.budgets (
@@ -242,8 +225,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Create investments table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.investments (
@@ -258,8 +239,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Create goals table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.goals (
@@ -273,8 +252,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Create recurring transactions table
             supabase.rpc('execute', {
                 'sql': """
                 CREATE TABLE IF NOT EXISTS public.recurring (
@@ -289,8 +266,6 @@ def initialize_services():
                 );
                 """
             }).execute()
-            
-            # Enable Row Level Security
             supabase.rpc('execute', {
                 'sql': """
                 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
@@ -301,21 +276,17 @@ def initialize_services():
                 ALTER TABLE public.recurring ENABLE ROW LEVEL SECURITY;
                 """
             }).execute()
-            
             return True
-            
         except Exception as e:
             st.error(f"Error creating tables: {str(e)}")
             return False
 
     supabase = init_supabase()
     
-    # Initialize Gemini with enhanced error handling
     try:
         if GEMINI_API_KEY:
             genai.configure(api_key=GEMINI_API_KEY)
             gemini_model = genai.GenerativeModel('gemini-1.5-pro')
-            # Test the model with a simple prompt
             gemini_model.generate_content("Test connection")
             st.session_state.gemini_initialized = True
         else:
@@ -333,7 +304,6 @@ supabase, gemini_model = initialize_services()
 
 # Helper Functions
 def display_connection_status():
-    """Display connection status in the sidebar"""
     with st.sidebar:
         if st.session_state.supabase_connected:
             status = f"""
@@ -357,7 +327,6 @@ def display_connection_status():
 
 @st.cache_data(ttl=3600)
 def get_dynamic_categories(table, column, user_id, default_list):
-    """Get dynamic categories from database or use defaults"""
     if not st.session_state.supabase_connected:
         return default_list
     
@@ -373,17 +342,14 @@ def get_dynamic_categories(table, column, user_id, default_list):
         return default_list
 
 def get_financial_data(table, user_id, date_range=None):
-    """Generic function to get financial data with optional date range"""
     if not st.session_state.supabase_connected or st.session_state.mock_data:
         return pd.DataFrame()
     
     try:
         query = supabase.table(table).select('*').eq('user_id', user_id)
-        
         if date_range:
             start_date, end_date = date_range
             query = query.gte('date', start_date.isoformat()).lte('date', end_date.isoformat())
-        
         response = query.execute()
         return pd.DataFrame(response.data) if response.data else pd.DataFrame()
     except Exception as e:
@@ -391,7 +357,6 @@ def get_financial_data(table, user_id, date_range=None):
         return pd.DataFrame()
 
 def generate_mock_data(data_type, rows=5):
-    """Generate mock data for demo purposes"""
     today = datetime.now()
     if data_type == 'expenses':
         data = {
@@ -449,7 +414,6 @@ def generate_mock_data(data_type, rows=5):
     return pd.DataFrame(data)
 
 def calculate_financial_metrics(expenses_df, income_df):
-    """Calculate key financial metrics"""
     metrics = {
         'total_expenses': expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
         'total_income': income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
@@ -464,33 +428,33 @@ def calculate_financial_metrics(expenses_df, income_df):
     return metrics
 
 def create_financial_charts(expenses_df, income_df):
-    """Create financial visualization charts"""
     charts = {}
     if not expenses_df.empty and 'amount' in expenses_df.columns and 'category' in expenses_df.columns:
         cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
         charts['expense_by_category'] = px.pie(cat_data, values='amount', names='category', title="Expense Distribution",
-                                              color_discrete_sequence=px.colors.sequential.Viridis)
+                                             color_discrete_sequence=px.colors.sequential.Viridis)
+    if not expenses_df.empty and 'amount' in expenses_df.columns and 'date' in expenses_df.columns:
         trend_data = expenses_df.groupby('date')['amount'].sum().reset_index()
         charts['expense_trend'] = px.line(trend_data, x='date', y='amount', title="Expense Trends",
-                                         labels={'amount': 'Amount ($)', 'date': 'Date'})
+                                        labels={'amount': 'Amount ($)', 'date': 'Date'})
     if not income_df.empty and 'amount' in income_df.columns and 'source' in income_df.columns:
         source_data = income_df.groupby('source')['amount'].sum().reset_index()
         charts['income_by_source'] = px.bar(source_data, x='source', y='amount', title="Income by Source",
-                                           color='source', labels={'amount': 'Amount ($)', 'source': 'Income Source'})
+                                          color='source', labels={'amount': 'Amount ($)', 'source': 'Income Source'})
+    if not income_df.empty and 'amount' in income_df.columns and 'date' in income_df.columns:
         income_trend = income_df.groupby('date')['amount'].sum().reset_index()
         charts['income_trend'] = px.line(income_trend, x='date', y='amount', title="Income Trends",
-                                        labels={'amount': 'Amount ($)', 'date': 'Date'})
-    if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns:
+                                       labels={'amount': 'Amount ($)', 'date': 'Date'})
+    if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns and 'date' in expenses_df.columns and 'date' in income_df.columns:
         cash_flow = pd.merge(expenses_df.groupby('date')['amount'].sum().reset_index(name='expenses'),
                              income_df.groupby('date')['amount'].sum().reset_index(name='income'),
                              on='date', how='outer').fillna(0)
         cash_flow['net'] = cash_flow['income'] - cash_flow['expenses']
         charts['cash_flow'] = px.line(cash_flow, x='date', y=['income', 'expenses', 'net'], title="Cash Flow",
-                                     labels={'value': 'Amount ($)', 'date': 'Date', 'variable': 'Type'})
+                                    labels={'value': 'Amount ($)', 'date': 'Date', 'variable': 'Type'})
     return charts
 
 def generate_pdf_report(report_type, user_id, start_date, end_date):
-    """Generate PDF financial report"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -518,13 +482,12 @@ def generate_pdf_report(report_type, user_id, start_date, end_date):
         return None
 
 def get_financial_advice(user_data, query):
-    """Get enhanced financial advice from Gemini with robust error handling"""
     if not st.session_state.gemini_initialized:
         return "Financial advice unavailable. Gemini API not initialized. Please check your API key or configuration."
     
     try:
         prompt = f"""
-        You are a highly experienced financial advisor with a deep understanding of personal finance. Provide detailed, actionable, and personalized advice based on the following:
+        You are a highly experienced financial advisor with a deep understanding of personal finance. Provide detailed, actionable advice based on the following:
 
         User Financial Data:
         - Monthly Income: ${user_data.get('total_income', 0):,.2f}
@@ -548,7 +511,7 @@ def get_financial_advice(user_data, query):
         return "Unable to provide advice at this time due to an internal error. Please try again later."
 
 # Dynamic Categories
-current_user_id = 1  # In a real app, this would come from authentication
+current_user_id = 1
 EXPENSE_CATEGORIES = get_dynamic_categories("expenses", "category", current_user_id, DEFAULT_EXPENSE_CATEGORIES)
 PAYMENT_METHODS = get_dynamic_categories("expenses", "payment_method", current_user_id, DEFAULT_PAYMENT_METHODS)
 INCOME_SOURCES = get_dynamic_categories("income", "source", current_user_id, DEFAULT_INCOME_SOURCES)
@@ -637,8 +600,10 @@ if current_page == "Dashboard":
     if not expenses_df.empty or not income_df.empty:
         recent_expenses = expenses_df.sort_values('date', ascending=False).head(3) if 'date' in expenses_df.columns else pd.DataFrame()
         recent_income = income_df.sort_values('date', ascending=False).head(3) if 'date' in income_df.columns else pd.DataFrame()
-        if not recent_expenses.empty: st.write("**Recent Expenses**"); st.dataframe(recent_expenses[['date', 'amount', 'category', 'payment_method']] if all(col in recent_expenses.columns for col in ['date', 'amount', 'category', 'payment_method']) else recent_expenses)
-        if not recent_income.empty: st.write("**Recent Income**"); st.dataframe(recent_income[['date', 'amount', 'source']] if all(col in recent_income.columns for col in ['date', 'amount', 'source']) else recent_income)
+        if not recent_expenses.empty and 'date' in recent_expenses.columns and 'amount' in recent_expenses.columns and 'category' in recent_expenses.columns and 'payment_method' in recent_expenses.columns:
+            st.write("**Recent Expenses**"); st.dataframe(recent_expenses[['date', 'amount', 'category', 'payment_method']])
+        if not recent_income.empty and 'date' in recent_income.columns and 'amount' in recent_income.columns and 'source' in recent_income.columns:
+            st.write("**Recent Income**"); st.dataframe(recent_income[['date', 'amount', 'source']])
     else: st.info("No transactions found for the selected period.")
     charts = create_financial_charts(expenses_df, income_df)
     for chart in charts.values(): st.plotly_chart(chart, use_container_width=True)
@@ -680,11 +645,11 @@ elif current_page == "Expenses":
         st.markdown(f"**Total Spent:** ${total_spent:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(expenses_df)}")
         tab1, tab2, tab3 = st.tabs(["📊 Overview", "📅 Trends", "🔍 Details"])
         with tab1:
-            if 'category' in expenses_df.columns:
+            if 'category' in expenses_df.columns and 'amount' in expenses_df.columns:
                 cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
                 fig1 = px.pie(cat_data, values='amount', names='category', title="Expense Distribution by Category")
                 st.plotly_chart(fig1, use_container_width=True)
-            if 'payment_method' in expenses_df.columns:
+            if 'payment_method' in expenses_df.columns and 'amount' in expenses_df.columns:
                 pm_data = expenses_df.groupby('payment_method')['amount'].sum().reset_index()
                 fig2 = px.bar(pm_data, x='payment_method', y='amount', title="Expenses by Payment Method", color='payment_method')
                 st.plotly_chart(fig2, use_container_width=True)
@@ -693,7 +658,8 @@ elif current_page == "Expenses":
                 daily_data = expenses_df.groupby('date')['amount'].sum().reset_index()
                 fig3 = px.line(daily_data, x='date', y='amount', title="Daily Expense Trend", markers=True)
                 st.plotly_chart(fig3, use_container_width=True)
-                weekly_data = expenses_df.copy(); weekly_data['date'] = pd.to_datetime(weekly_data['date'])
+                weekly_data = expenses_df.copy()
+                weekly_data['date'] = pd.to_datetime(weekly_data['date'])
                 weekly_data = weekly_data.set_index('date').resample('W')['amount'].sum().reset_index()
                 fig4 = px.bar(weekly_data, x='date', y='amount', title="Weekly Expense Summary")
                 st.plotly_chart(fig4, use_container_width=True)
@@ -739,7 +705,7 @@ elif current_page == "Income":
         st.markdown(f"**Total Income:** ${total_income:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(income_df)}")
         tab1, tab2 = st.tabs(["📊 Overview", "📅 Trends"])
         with tab1:
-            if 'source' in income_df.columns:
+            if 'source' in income_df.columns and 'amount' in income_df.columns:
                 source_data = income_df.groupby('source')['amount'].sum().reset_index()
                 fig = px.bar(source_data, x='source', y='amount', title="Income by Source", color='source')
                 st.plotly_chart(fig, use_container_width=True)
@@ -778,7 +744,7 @@ elif current_page == "Budgets":
             expenses_df = get_financial_data('expenses', current_user_id, (datetime.strptime(budget['start_date'], '%Y-%m-%d'), datetime.now()))
             spent = expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0
             if 'category' in expenses_df.columns and not expenses_df.empty:
-                spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum()
+                spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum() if 'amount' in expenses_df.columns else 0
             progress = (spent / budget['amount'] * 100) if budget['amount'] > 0 else 0
             st.markdown(f"<div class='metric-box'>", unsafe_allow_html=True)
             st.metric(f"{budget['category']} ({budget['period']})", f"${spent:,.2f} / ${budget['amount']:,.2f}", f"{progress:.1f}%")
@@ -842,7 +808,7 @@ elif current_page == "Analytics":
             st.plotly_chart(fig)
         else: st.info("No income data."); fig = px.pie(names=["No Data"], values=[1]); st.plotly_chart(fig)
     with tab3: 
-        if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns:
+        if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns and 'date' in expenses_df.columns and 'date' in income_df.columns:
             cash_flow = pd.merge(expenses_df.groupby('date')['amount'].sum().reset_index(name='expenses'),
                                  income_df.groupby('date')['amount'].sum().reset_index(name='income'),
                                  on='date', how='outer').fillna(0)
@@ -951,11 +917,8 @@ elif current_page == "Financial Workbench":
 
 elif current_page == "Financial Advisor":
     st.markdown("<div class='section-header'>🤖 Financial Advisor</div>", unsafe_allow_html=True)
-    # Get user financial data with fallback for empty DataFrames
     expenses_df = get_financial_data('expenses', current_user_id)
     income_df = get_financial_data('income', current_user_id)
-    
-    # Use mock data if real data is empty and mock_data is enabled
     if st.session_state.mock_data and (expenses_df.empty or income_df.empty):
         expenses_df = generate_mock_data('expenses') if expenses_df.empty else expenses_df
         income_df = generate_mock_data('income') if income_df.empty else income_df
@@ -965,16 +928,13 @@ elif current_page == "Financial Advisor":
         "total_income": income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
         "expense_categories": expenses_df['category'].unique().tolist() if 'category' in expenses_df.columns and not expenses_df.empty else [],
         "income_sources": income_df['source'].unique().tolist() if 'source' in income_df.columns and not income_df.empty else [],
-        "savings_rate": 0  # Default value
+        "savings_rate": 0
     }
-    
-    # Calculate savings rate only if columns exist and DataFrames are not empty
     if 'amount' in income_df.columns and 'amount' in expenses_df.columns and not income_df.empty and not expenses_df.empty:
         total_income = income_df['amount'].sum()
         total_expenses = expenses_df['amount'].sum()
         user_data['savings_rate'] = ((total_income - total_expenses) / total_income * 100) if total_income > 0 else 0
     
-    # Display financial snapshot
     with st.expander("📊 Your Financial Snapshot", expanded=True):
         cols = st.columns(2)
         cols[0].metric("Monthly Income", f"${user_data['total_income']:,.2f}")
@@ -982,7 +942,6 @@ elif current_page == "Financial Advisor":
         cols[0].metric("Savings Rate", f"{user_data['savings_rate']:,.1f}%")
         cols[1].metric("Net Income", f"${user_data['total_income'] - user_data['total_expenses']:,.2f}")
     
-    # Financial advice interface
     st.subheader("Get Personalized Financial Advice")
     query = st.text_area("Ask me anything about your finances (e.g., 'How can I save more?', 'Should I invest in stocks?')")
     if st.button("Get Advice"):
