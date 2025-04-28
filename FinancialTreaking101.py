@@ -147,9 +147,15 @@ def initialize_services():
     def init_supabase():
         try:
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            # Test connection by querying an existing table (e.g., 'expenses')
+            # Test connection by querying a minimal select (avoids table existence dependency)
             response = supabase.table('expenses').select('id', count='exact').execute()
             if response.error:
+                # If 'expenses' table doesn't exist, create a fallback connection test
+                if response.error.get('code') == '42P01':  # Relation does not exist
+                    st.warning("Table 'expenses' not found. Creating mock connection for testing.")
+                    st.session_state.supabase_connected = False
+                    st.session_state.mock_data = True
+                    return None
                 st.error(f"Supabase connection error: {response.error}")
                 return None
             st.session_state.supabase_connected = True
@@ -162,10 +168,15 @@ def initialize_services():
 
     supabase = init_supabase()
     
-    # Initialize Gemini
+    # Initialize Gemini with enhanced error handling
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-pro')  # Upgraded to pro model for better reasoning
+        gemini_model = genai.GenerativeModel('gemini-1.5-pro')  # Using pro model for better reasoning
+        # Test the model with a simple prompt
+        test_response = gemini_model.generate_content("Test")
+        if test_response.error:
+            st.error(f"Gemini API test failed: {test_response.error}")
+            gemini_model = None
         st.session_state.gemini_initialized = True
     except Exception as e:
         st.error(f"Failed to initialize Gemini API: {str(e)}")
@@ -287,12 +298,12 @@ def generate_mock_data(data_type, rows=5):
 def calculate_financial_metrics(expenses_df, income_df):
     """Calculate key financial metrics"""
     metrics = {
-        'total_expenses': expenses_df['amount'].sum() if not expenses_df.empty else 0,
-        'total_income': income_df['amount'].sum() if not income_df.empty else 0,
-        'fixed_expenses': expenses_df[expenses_df['fixed']]['amount'].sum() if not expenses_df.empty else 0,
-        'variable_expenses': expenses_df[~expenses_df['fixed']]['amount'].sum() if not expenses_df.empty else 0,
-        'fixed_income': income_df[income_df['fixed']]['amount'].sum() if not income_df.empty else 0,
-        'variable_income': income_df[~income_df['fixed']]['amount'].sum() if not income_df.empty else 0,
+        'total_expenses': expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
+        'total_income': income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
+        'fixed_expenses': expenses_df[expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
+        'variable_expenses': expenses_df[~expenses_df['fixed']]['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
+        'fixed_income': income_df[income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
+        'variable_income': income_df[~income_df['fixed']]['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
     }
     metrics['net_income'] = metrics['total_income'] - metrics['total_expenses']
     metrics['savings_rate'] = (metrics['net_income'] / metrics['total_income'] * 100) if metrics['total_income'] > 0 else 0
@@ -302,21 +313,21 @@ def calculate_financial_metrics(expenses_df, income_df):
 def create_financial_charts(expenses_df, income_df):
     """Create financial visualization charts"""
     charts = {}
-    if not expenses_df.empty:
+    if not expenses_df.empty and 'amount' in expenses_df.columns and 'category' in expenses_df.columns:
         cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
         charts['expense_by_category'] = px.pie(cat_data, values='amount', names='category', title="Expense Distribution",
                                               color_discrete_sequence=px.colors.sequential.Viridis)
         trend_data = expenses_df.groupby('date')['amount'].sum().reset_index()
         charts['expense_trend'] = px.line(trend_data, x='date', y='amount', title="Expense Trends",
                                          labels={'amount': 'Amount ($)', 'date': 'Date'})
-    if not income_df.empty:
+    if not income_df.empty and 'amount' in income_df.columns and 'source' in income_df.columns:
         source_data = income_df.groupby('source')['amount'].sum().reset_index()
         charts['income_by_source'] = px.bar(source_data, x='source', y='amount', title="Income by Source",
                                            color='source', labels={'amount': 'Amount ($)', 'source': 'Income Source'})
         income_trend = income_df.groupby('date')['amount'].sum().reset_index()
         charts['income_trend'] = px.line(income_trend, x='date', y='amount', title="Income Trends",
                                         labels={'amount': 'Amount ($)', 'date': 'Date'})
-    if not expenses_df.empty and not income_df.empty:
+    if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns:
         cash_flow = pd.merge(expenses_df.groupby('date')['amount'].sum().reset_index(name='expenses'),
                              income_df.groupby('date')['amount'].sum().reset_index(name='income'),
                              on='date', how='outer').fillna(0)
@@ -340,11 +351,11 @@ def generate_pdf_report(report_type, user_id, start_date, end_date):
         pdf.cell(200, 10, txt=f"Total Expenses: ${metrics['total_expenses']:,.2f}", ln=1)
         pdf.cell(200, 10, txt=f"Net Income: ${metrics['net_income']:,.2f}", ln=1)
         pdf.cell(200, 10, txt=f"Savings Rate: {metrics['savings_rate']:.1f}%", ln=1)
-        if not expenses_df.empty:
+        if not expenses_df.empty and 'category' in expenses_df.columns and 'amount' in expenses_df.columns:
             pdf.cell(200, 10, txt="Expense Breakdown:", ln=1)
             for cat, amt in expenses_df.groupby('category')['amount'].sum().items():
                 pdf.cell(200, 10, txt=f"{cat}: ${amt:,.2f}", ln=1)
-        if not income_df.empty:
+        if not income_df.empty and 'source' in income_df.columns and 'amount' in income_df.columns:
             pdf.cell(200, 10, txt="Income Breakdown:", ln=1)
             for src, amt in income_df.groupby('source')['amount'].sum().items():
                 pdf.cell(200, 10, txt=f"{src}: ${amt:,.2f}", ln=1)
@@ -354,9 +365,10 @@ def generate_pdf_report(report_type, user_id, start_date, end_date):
         return None
 
 def get_financial_advice(user_data, query):
-    """Get enhanced financial advice from Gemini"""
+    """Get enhanced financial advice from Gemini with robust error handling"""
     if not st.session_state.gemini_initialized:
-        return "Financial advice unavailable. Gemini API not initialized."
+        return "Financial advice unavailable. Gemini API not initialized. Please check your API key or configuration."
+    
     try:
         prompt = f"""
         You are a highly experienced financial advisor with a deep understanding of personal finance. Provide detailed, actionable, and personalized advice based on the following:
@@ -365,8 +377,8 @@ def get_financial_advice(user_data, query):
         - Monthly Income: ${user_data.get('total_income', 0):,.2f}
         - Monthly Expenses: ${user_data.get('total_expenses', 0):,.2f}
         - Savings Rate: {user_data.get('savings_rate', 0):.1f}%
-        - Expense Categories: {', '.join(user_data.get('expense_categories', []))}
-        - Income Sources: {', '.join(user_data.get('income_sources', []))}
+        - Expense Categories: {', '.join(user_data.get('expense_categories', [])) or 'None'}
+        - Income Sources: {', '.join(user_data.get('income_sources', [])) or 'None'}
 
         User Query: {query}
 
@@ -377,10 +389,12 @@ def get_financial_advice(user_data, query):
         - Use a professional yet approachable tone.
         """
         response = gemini_model.generate_content(prompt)
+        if response.error:
+            return f"Error generating advice: {response.error}"
         return response.text
     except Exception as e:
         st.error(f"Error getting financial advice: {str(e)}")
-        return "Unable to provide advice at this time."
+        return "Unable to provide advice at this time due to an internal error. Please try again later."
 
 # Dynamic Categories
 current_user_id = 1  # In a real app, this would come from authentication
@@ -456,8 +470,8 @@ if current_page == "Dashboard":
     income_df = get_financial_data('income', current_user_id, (start_date, end_date))
     if st.session_state.mock_data and (expenses_df.empty or income_df.empty):
         st.warning("Displaying mock data for demonstration purposes")
-        expenses_df = generate_mock_data('expenses')
-        income_df = generate_mock_data('income')
+        expenses_df = generate_mock_data('expenses') if expenses_df.empty else expenses_df
+        income_df = generate_mock_data('income') if income_df.empty else income_df
     metrics = calculate_financial_metrics(expenses_df, income_df)
     cols = st.columns(4)
     with cols[0]: st.markdown("<div class='metric-box'>", unsafe_allow_html=True); st.metric("Total Income", f"${metrics['total_income']:,.2f}"); st.markdown("</div>", unsafe_allow_html=True)
@@ -470,10 +484,10 @@ if current_page == "Dashboard":
     if metrics['fixed_expenses'] / metrics['total_income'] > 0.5: st.warning("Your fixed expenses are high (>50% of income). Look for ways to reduce recurring costs.")
     st.subheader("Recent Transactions")
     if not expenses_df.empty or not income_df.empty:
-        recent_expenses = expenses_df.sort_values('date', ascending=False).head(3)
-        recent_income = income_df.sort_values('date', ascending=False).head(3)
-        if not recent_expenses.empty: st.write("**Recent Expenses**"); st.dataframe(recent_expenses[['date', 'amount', 'category', 'payment_method']])
-        if not recent_income.empty: st.write("**Recent Income**"); st.dataframe(recent_income[['date', 'amount', 'source']])
+        recent_expenses = expenses_df.sort_values('date', ascending=False).head(3) if 'date' in expenses_df.columns else pd.DataFrame()
+        recent_income = income_df.sort_values('date', ascending=False).head(3) if 'date' in income_df.columns else pd.DataFrame()
+        if not recent_expenses.empty: st.write("**Recent Expenses**"); st.dataframe(recent_expenses[['date', 'amount', 'category', 'payment_method']] if all(col in recent_expenses.columns for col in ['date', 'amount', 'category', 'payment_method']) else recent_expenses)
+        if not recent_income.empty: st.write("**Recent Income**"); st.dataframe(recent_income[['date', 'amount', 'source']] if all(col in recent_income.columns for col in ['date', 'amount', 'source']) else recent_income)
     else: st.info("No transactions found for the selected period.")
     charts = create_financial_charts(expenses_df, income_df)
     for chart in charts.values(): st.plotly_chart(chart, use_container_width=True)
@@ -509,31 +523,34 @@ elif current_page == "Expenses":
     end_date = col2.date_input("End Date", datetime.now())
     expenses_df = get_financial_data('expenses', current_user_id, (start_date, end_date))
     if st.session_state.mock_data and expenses_df.empty: expenses_df = generate_mock_data('expenses', rows=15)
-    if not expenses_df.empty:
+    if not expenses_df.empty and 'amount' in expenses_df.columns:
         total_spent = expenses_df['amount'].sum()
         avg_daily = total_spent / ((end_date - start_date).days + 1)
         st.markdown(f"**Total Spent:** ${total_spent:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(expenses_df)}")
         tab1, tab2, tab3 = st.tabs(["📊 Overview", "📅 Trends", "🔍 Details"])
         with tab1:
-            cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
-            fig1 = px.pie(cat_data, values='amount', names='category', title="Expense Distribution by Category")
-            st.plotly_chart(fig1, use_container_width=True)
-            pm_data = expenses_df.groupby('payment_method')['amount'].sum().reset_index()
-            fig2 = px.bar(pm_data, x='payment_method', y='amount', title="Expenses by Payment Method", color='payment_method')
-            st.plotly_chart(fig2, use_container_width=True)
+            if 'category' in expenses_df.columns:
+                cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
+                fig1 = px.pie(cat_data, values='amount', names='category', title="Expense Distribution by Category")
+                st.plotly_chart(fig1, use_container_width=True)
+            if 'payment_method' in expenses_df.columns:
+                pm_data = expenses_df.groupby('payment_method')['amount'].sum().reset_index()
+                fig2 = px.bar(pm_data, x='payment_method', y='amount', title="Expenses by Payment Method", color='payment_method')
+                st.plotly_chart(fig2, use_container_width=True)
         with tab2:
-            daily_data = expenses_df.groupby('date')['amount'].sum().reset_index()
-            fig3 = px.line(daily_data, x='date', y='amount', title="Daily Expense Trend", markers=True)
-            st.plotly_chart(fig3, use_container_width=True)
-            weekly_data = expenses_df.copy(); weekly_data['date'] = pd.to_datetime(weekly_data['date'])
-            weekly_data = weekly_data.set_index('date').resample('W')['amount'].sum().reset_index()
-            fig4 = px.bar(weekly_data, x='date', y='amount', title="Weekly Expense Summary")
-            st.plotly_chart(fig4, use_container_width=True)
+            if 'date' in expenses_df.columns and 'amount' in expenses_df.columns:
+                daily_data = expenses_df.groupby('date')['amount'].sum().reset_index()
+                fig3 = px.line(daily_data, x='date', y='amount', title="Daily Expense Trend", markers=True)
+                st.plotly_chart(fig3, use_container_width=True)
+                weekly_data = expenses_df.copy(); weekly_data['date'] = pd.to_datetime(weekly_data['date'])
+                weekly_data = weekly_data.set_index('date').resample('W')['amount'].sum().reset_index()
+                fig4 = px.bar(weekly_data, x='date', y='amount', title="Weekly Expense Summary")
+                st.plotly_chart(fig4, use_container_width=True)
         with tab3:
-            st.dataframe(expenses_df.sort_values('date', ascending=False))
+            st.dataframe(expenses_df.sort_values('date', ascending=False) if 'date' in expenses_df.columns else expenses_df)
             csv = expenses_df.to_csv(index=False).encode('utf-8')
             st.download_button("Export Expenses as CSV", csv, "expenses.csv", "text/csv", key='download-expenses-csv')
-    else: st.info("No expenses found for the selected period.")
+    else: st.info("No expenses found for the selected period."); fig = px.pie(names=["No Data"], values=[1], title="Expense Distribution"); st.plotly_chart(fig)
 
 elif current_page == "Income":
     st.markdown("<div class='section-header'>💵 Income</div>", unsafe_allow_html=True)
@@ -565,20 +582,22 @@ elif current_page == "Income":
     end_date = col2.date_input("End Date", datetime.now())
     income_df = get_financial_data('income', current_user_id, (start_date, end_date))
     if st.session_state.mock_data and income_df.empty: income_df = generate_mock_data('income', rows=15)
-    if not income_df.empty:
+    if not income_df.empty and 'amount' in income_df.columns:
         total_income = income_df['amount'].sum()
         avg_daily = total_income / ((end_date - start_date).days + 1)
         st.markdown(f"**Total Income:** ${total_income:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(income_df)}")
         tab1, tab2 = st.tabs(["📊 Overview", "📅 Trends"])
         with tab1:
-            source_data = income_df.groupby('source')['amount'].sum().reset_index()
-            fig = px.bar(source_data, x='source', y='amount', title="Income by Source", color='source')
-            st.plotly_chart(fig, use_container_width=True)
+            if 'source' in income_df.columns:
+                source_data = income_df.groupby('source')['amount'].sum().reset_index()
+                fig = px.bar(source_data, x='source', y='amount', title="Income by Source", color='source')
+                st.plotly_chart(fig, use_container_width=True)
         with tab2:
-            trend_data = income_df.groupby('date')['amount'].sum().reset_index()
-            fig = px.line(trend_data, x='date', y='amount', title="Income Trends", markers=True)
-            st.plotly_chart(fig, use_container_width=True)
-    else: st.info("No income found for the selected period.")
+            if 'date' in income_df.columns and 'amount' in income_df.columns:
+                trend_data = income_df.groupby('date')['amount'].sum().reset_index()
+                fig = px.line(trend_data, x='date', y='amount', title="Income Trends", markers=True)
+                st.plotly_chart(fig, use_container_width=True)
+    else: st.info("No income found for the selected period."); fig = px.bar(x=["No Data"], y=[1], title="Income Sources"); st.plotly_chart(fig)
 
 elif current_page == "Budgets":
     st.markdown("<div class='section-header'>📊 Budgets</div>", unsafe_allow_html=True)
@@ -603,10 +622,10 @@ elif current_page == "Budgets":
     st.subheader("Budget Tracking")
     budgets_df = get_financial_data('budgets', current_user_id)
     if st.session_state.mock_data and budgets_df.empty: budgets_df = generate_mock_data('budgets', rows=5)
-    if not budgets_df.empty:
+    if not budgets_df.empty and 'amount' in budgets_df.columns and 'category' in budgets_df.columns:
         for _, budget in budgets_df.iterrows():
             expenses_df = get_financial_data('expenses', current_user_id, (datetime.strptime(budget['start_date'], '%Y-%m-%d'), datetime.now()))
-            spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum()
+            spent = expenses_df[expenses_df['category'] == budget['category']]['amount'].sum() if 'amount' in expenses_df.columns and 'category' in expenses_df.columns else 0
             progress = (spent / budget['amount'] * 100) if budget['amount'] > 0 else 0
             st.markdown(f"<div class='metric-box'>", unsafe_allow_html=True)
             st.metric(f"{budget['category']} ({budget['period']})", f"${spent:,.2f} / ${budget['amount']:,.2f}", f"{progress:.1f}%")
@@ -637,7 +656,7 @@ elif current_page == "Goals":
     st.subheader("Goal Progress")
     goals_df = get_financial_data('goals', current_user_id)
     if st.session_state.mock_data and goals_df.empty: goals_df = generate_mock_data('goals', rows=3)
-    if not goals_df.empty:
+    if not goals_df.empty and 'target_amount' in goals_df.columns and 'current_amount' in goals_df.columns:
         for _, goal in goals_df.iterrows():
             progress = (goal['current_amount'] / goal['target_amount'] * 100) if goal['target_amount'] > 0 else 0
             st.markdown(f"<div class='metric-box'>", unsafe_allow_html=True)
@@ -654,18 +673,23 @@ elif current_page == "Analytics":
     expenses_df = get_financial_data('expenses', current_user_id, (start_date, end_date))
     income_df = get_financial_data('income', current_user_id, (start_date, end_date))
     if st.session_state.mock_data and (expenses_df.empty or income_df.empty):
-        expenses_df = generate_mock_data('expenses'); income_df = generate_mock_data('income')
+        expenses_df = generate_mock_data('expenses') if expenses_df.empty else expenses_df
+        income_df = generate_mock_data('income') if income_df.empty else income_df
     metrics = calculate_financial_metrics(expenses_df, income_df)
     st.markdown("<div class='metric-box'>", unsafe_allow_html=True); st.metric("Savings Rate", f"{metrics['savings_rate']:.1f}%"); st.markdown("</div>", unsafe_allow_html=True)
     tab1, tab2, tab3 = st.tabs(["📊 Expense Breakdown", "💰 Income Sources", "💸 Cash Flow"])
     with tab1: 
-        if not expenses_df.empty: fig = px.pie(expenses_df, values='amount', names='category', title="Expense Breakdown"); st.plotly_chart(fig)
+        if not expenses_df.empty and 'amount' in expenses_df.columns and 'category' in expenses_df.columns:
+            fig = px.pie(expenses_df, values='amount', names='category', title="Expense Breakdown")
+            st.plotly_chart(fig)
         else: st.info("No expense data."); fig = px.pie(names=["No Data"], values=[1]); st.plotly_chart(fig)
     with tab2: 
-        if not income_df.empty: fig = px.bar(income_df, x='source', y='amount', color='source', title="Income Sources"); st.plotly_chart(fig)
+        if not income_df.empty and 'amount' in income_df.columns and 'source' in income_df.columns:
+            fig = px.bar(income_df, x='source', y='amount', color='source', title="Income Sources")
+            st.plotly_chart(fig)
         else: st.info("No income data."); fig = px.pie(names=["No Data"], values=[1]); st.plotly_chart(fig)
     with tab3: 
-        if not expenses_df.empty and not income_df.empty:
+        if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns:
             cash_flow = pd.merge(expenses_df.groupby('date')['amount'].sum().reset_index(name='expenses'),
                                  income_df.groupby('date')['amount'].sum().reset_index(name='income'),
                                  on='date', how='outer').fillna(0)
@@ -714,7 +738,7 @@ elif current_page == "Investments":
     st.subheader("Investment Portfolio")
     investments_df = get_financial_data('investments', current_user_id)
     if st.session_state.mock_data and investments_df.empty: investments_df = generate_mock_data('investments', rows=5)
-    if not investments_df.empty:
+    if not investments_df.empty and 'amount' in investments_df.columns and 'asset_type' in investments_df.columns:
         total_invested = investments_df['amount'].sum()
         st.markdown(f"**Total Invested:** ${total_invested:,.2f}")
         fig = px.pie(investments_df, values='amount', names='asset_type', title="Portfolio Allocation")
@@ -746,7 +770,7 @@ elif current_page == "Recurring":
     st.subheader("Recurring Transactions")
     recurring_df = get_financial_data('recurring', current_user_id)
     if st.session_state.mock_data and recurring_df.empty: recurring_df = generate_mock_data('recurring', rows=5)
-    if not recurring_df.empty:
+    if not recurring_df.empty and 'amount' in recurring_df.columns and 'category' in recurring_df.columns:
         st.dataframe(recurring_df)
         fig = px.bar(recurring_df, x='category', y='amount', color='type', title="Recurring Transactions")
         st.plotly_chart(fig, use_container_width=True)
@@ -757,7 +781,7 @@ elif current_page == "Financial Workbench":
     st.subheader("Portfolio Optimization")
     investments_df = get_financial_data('investments', current_user_id)
     if st.session_state.mock_data and investments_df.empty: investments_df = generate_mock_data('investments', rows=5)
-    if not investments_df.empty:
+    if not investments_df.empty and 'amount' in investments_df.columns:
         def objective(weights): return -np.sum(investments_df['amount'] * weights)
         constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
         bounds = tuple((0, 1) for _ in range(len(investments_df)))
@@ -774,22 +798,35 @@ elif current_page == "Financial Workbench":
 
 elif current_page == "Financial Advisor":
     st.markdown("<div class='section-header'>🤖 Financial Advisor</div>", unsafe_allow_html=True)
+    # Get user financial data with fallback for empty DataFrames
     expenses_df = get_financial_data('expenses', current_user_id)
     income_df = get_financial_data('income', current_user_id)
+    
+    # Use mock data if real data is empty and mock_data is enabled
+    if st.session_state.mock_data and (expenses_df.empty or income_df.empty):
+        expenses_df = generate_mock_data('expenses') if expenses_df.empty else expenses_df
+        income_df = generate_mock_data('income') if income_df.empty else income_df
+
     user_data = {
-        "total_expenses": expenses_df['amount'].sum() if not expenses_df.empty else 0,
-        "total_income": income_df['amount'].sum() if not income_df.empty else 0,
-        "expense_categories": expenses_df['category'].unique().tolist() if not expenses_df.empty else [],
-        "income_sources": income_df['source'].unique().tolist() if not income_df.empty else [],
-        "savings_rate": ((income_df['amount'].sum() - expenses_df['amount'].sum()) / income_df['amount'].sum() * 100)
-                       if income_df['amount'].sum() > 0 else 0
+        "total_expenses": expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0,
+        "total_income": income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0,
+        "expense_categories": expenses_df['category'].unique().tolist() if 'category' in expenses_df.columns and not expenses_df.empty else [],
+        "income_sources": income_df['source'].unique().tolist() if 'source' in income_df.columns and not income_df.empty else [],
+        "savings_rate": ((income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0) - 
+                         (expenses_df['amount'].sum() if 'amount' in expenses_df.columns and not expenses_df.empty else 0)) / 
+                        (income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 1) * 100 if 
+                        (income_df['amount'].sum() if 'amount' in income_df.columns and not income_df.empty else 0) > 0 else 0
     }
+    
+    # Display financial snapshot
     with st.expander("📊 Your Financial Snapshot", expanded=True):
         cols = st.columns(2)
         cols[0].metric("Monthly Income", f"${user_data['total_income']:,.2f}")
         cols[1].metric("Monthly Expenses", f"${user_data['total_expenses']:,.2f}")
         cols[0].metric("Savings Rate", f"{user_data['savings_rate']:.1f}%")
         cols[1].metric("Net Income", f"${user_data['total_income'] - user_data['total_expenses']:,.2f}")
+    
+    # Financial advice interface
     st.subheader("Get Personalized Financial Advice")
     query = st.text_area("Ask me anything about your finances (e.g., 'How can I save more?', 'Should I invest in stocks?')")
     if st.button("Get Advice"):
@@ -797,7 +834,8 @@ elif current_page == "Financial Advisor":
             with st.spinner("Analyzing your finances and generating advice..."):
                 advice = get_financial_advice(user_data, query)
                 st.markdown(f"<div class='chat-bubble'>{advice}</div>", unsafe_allow_html=True)
-        else: st.warning("Please enter a question or financial goal")
+        else:
+            st.warning("Please enter a question or financial goal")
 
 else:
     st.markdown(f"<div class='section-header'>{selected_page}</div>", unsafe_allow_html=True)
