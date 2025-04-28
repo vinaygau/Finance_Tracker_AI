@@ -32,6 +32,10 @@ if 'supabase_connected' not in st.session_state:
     st.session_state.supabase_connected = False
 if 'mock_data' not in st.session_state:
     st.session_state.mock_data = False
+if 'tables_created' not in st.session_state:
+    st.session_state.tables_created = False
+if 'gemini_initialized' not in st.session_state:
+    st.session_state.gemini_initialized = False
 
 # Set page config as the FIRST Streamlit command
 st.set_page_config(
@@ -91,7 +95,7 @@ custom_css = """
         padding: 10px;
         border-radius: 8px;
         margin-bottom: 10px;
-        color: blue;  /* Changed font color to blue for Gemini LLM output */
+        color: blue;
     }
     .info-box {
         background-color: #e6f3ff;
@@ -122,13 +126,20 @@ custom_css = """
         border-radius: 4px;
         margin-bottom: 10px;
     }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 10px;
+    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# Initialize Supabase and Gemini
+# Initialize Supabase and Gemini with table creation
 def initialize_services():
-    """Initialize Supabase and Gemini services with proper error handling"""
+    """Initialize Supabase and Gemini services with proper error handling and table creation"""
     # Try to get secrets from Streamlit
     try:
         SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -136,46 +147,181 @@ def initialize_services():
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         st.session_state.using_secrets = True
     except (KeyError, FileNotFoundError):
-        # Fallback to environment variables or hardcoded values for local development
-        SUPABASE_URL = os.getenv("SUPABASE_URL", "https://hugjvlpvxqvnkuzfyacw.supabase.co")
-        SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Z2p2bHB2eHF2bmt1emZ5YWN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ0Nzg4NDIsImV4cCI6MjA2MDA1NDg0Mn0.BDe2Wrr74P-pkR0XF6Sfgheq6k4Z0LvidHV-7JiDC30")
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCgRp8oPIET2Y2tmOiC2PNhKjiV9vNxywU")
+        # Fallback to environment variables for local development
+        SUPABASE_URL = os.getenv("SUPABASE_URL")
+        SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         st.session_state.using_secrets = False
-        st.warning("Using fallback credentials. Configure secrets in production.")
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            st.error("Supabase credentials not configured. Using mock data only.")
+            st.session_state.supabase_connected = False
+            st.session_state.mock_data = True
+            return None, None
 
     # Initialize Supabase with retry logic
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def init_supabase():
         try:
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            # Test connection by querying a minimal select (avoids table existence dependency)
-            response = supabase.table('expenses').select('id', count='exact').execute()
-            if response.data is None:
-                # If 'expenses' table doesn't exist, create a fallback connection test
-                if hasattr(response, 'error') and response.error and response.error.get('code') == '42P01':  # Relation does not exist
-                    st.warning("Table 'expenses' not found. Creating mock connection for testing.")
-                    st.session_state.supabase_connected = False
-                    st.session_state.mock_data = True
-                    return None
-                st.error(f"Supabase connection error: {response.error}")
+            
+            # Check if tables exist, create if they don't
+            try:
+                # Test connection by querying a table
+                response = supabase.table('expenses').select('id', count='exact').limit(1).execute()
+                
+                if hasattr(response, 'error') and response.error:
+                    if 'relation "public.expenses" does not exist' in str(response.error):
+                        st.warning("Required tables not found. Creating database schema...")
+                        create_tables(supabase)
+                        st.session_state.tables_created = True
+                        st.success("Database tables created successfully!")
+                    else:
+                        st.error(f"Supabase connection error: {response.error}")
+                        return None
+                
+                st.session_state.supabase_connected = True
+                return supabase
+                
+            except Exception as e:
+                st.error(f"Error checking tables: {str(e)}")
                 return None
-            st.session_state.supabase_connected = True
-            return supabase
+                
         except Exception as e:
             st.error(f"Failed to connect to Supabase: {str(e)}")
             st.session_state.supabase_connected = False
             st.session_state.mock_data = True
             return None
 
+    def create_tables(supabase):
+        """Create required tables in Supabase"""
+        try:
+            # Create expenses table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.expenses (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    amount numeric NOT NULL,
+                    category text NOT NULL,
+                    date date NOT NULL,
+                    payment_method text NOT NULL,
+                    description text,
+                    fixed boolean DEFAULT false,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Create income table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.income (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    amount numeric NOT NULL,
+                    source text NOT NULL,
+                    date date NOT NULL,
+                    description text,
+                    fixed boolean DEFAULT false,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Create budgets table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.budgets (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    category text NOT NULL,
+                    amount numeric NOT NULL,
+                    period text NOT NULL,
+                    start_date date NOT NULL,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Create investments table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.investments (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    asset_name text NOT NULL,
+                    amount numeric NOT NULL,
+                    asset_type text NOT NULL,
+                    risk_level text NOT NULL,
+                    date date NOT NULL,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Create goals table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.goals (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    name text NOT NULL,
+                    target_amount numeric NOT NULL,
+                    current_amount numeric DEFAULT 0,
+                    deadline date NOT NULL,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Create recurring transactions table
+            supabase.rpc('execute', {
+                'sql': """
+                CREATE TABLE IF NOT EXISTS public.recurring (
+                    id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    user_id bigint NOT NULL,
+                    type text NOT NULL,
+                    amount numeric NOT NULL,
+                    category text NOT NULL,
+                    frequency text NOT NULL,
+                    start_date date NOT NULL,
+                    created_at timestamp with time zone DEFAULT now()
+                );
+                """
+            }).execute()
+            
+            # Enable Row Level Security
+            supabase.rpc('execute', {
+                'sql': """
+                ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.income ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.budgets ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.goals ENABLE ROW LEVEL SECURITY;
+                ALTER TABLE public.recurring ENABLE ROW LEVEL SECURITY;
+                """
+            }).execute()
+            
+            return True
+            
+        except Exception as e:
+            st.error(f"Error creating tables: {str(e)}")
+            return False
+
     supabase = init_supabase()
     
     # Initialize Gemini with enhanced error handling
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-pro')  # Using pro model for better reasoning
-        # Test the model with a simple prompt
-        gemini_model.generate_content("Test")  # Simply try the call; exception will be caught if it fails
-        st.session_state.gemini_initialized = True
+        if GEMINI_API_KEY:
+            genai.configure(api_key=GEMINI_API_KEY)
+            gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+            # Test the model with a simple prompt
+            gemini_model.generate_content("Test connection")
+            st.session_state.gemini_initialized = True
+        else:
+            st.warning("Gemini API key not configured. AI features disabled.")
+            gemini_model = None
+            st.session_state.gemini_initialized = False
     except Exception as e:
         st.error(f"Failed to initialize Gemini API: {str(e)}")
         gemini_model = None
@@ -190,10 +336,19 @@ def display_connection_status():
     """Display connection status in the sidebar"""
     with st.sidebar:
         if st.session_state.supabase_connected:
-            st.markdown('<div class="connection-status connected">✅ Connected to Supabase</div>', unsafe_allow_html=True)
+            status = f"""
+            <div class="connection-status connected">
+                ✅ Connected to Supabase
+                {f"<br><small>Tables created: {st.session_state.tables_created}</small>" if hasattr(st.session_state, 'tables_created') else ""}
+            </div>
+            """
+            st.markdown(status, unsafe_allow_html=True)
         else:
             st.markdown('<div class="connection-status disconnected">❌ Supabase Disconnected</div>', unsafe_allow_html=True)
-            st.markdown('<div class="warning-box">Using mock data. Some features may be limited.</div>', unsafe_allow_html=True)
+            if st.session_state.mock_data:
+                st.markdown('<div class="warning-box">Using mock data. Some features may be limited.</div>', unsafe_allow_html=True)
+            if st.button("Retry Connection", key="retry_connection"):
+                st.rerun()
         
         if st.session_state.gemini_initialized:
             st.markdown('<div class="connection-status connected">✅ Gemini API Ready</div>', unsafe_allow_html=True)
@@ -824,7 +979,7 @@ elif current_page == "Financial Advisor":
         cols = st.columns(2)
         cols[0].metric("Monthly Income", f"${user_data['total_income']:,.2f}")
         cols[1].metric("Monthly Expenses", f"${user_data['total_expenses']:,.2f}")
-        cols[0].metric("Savings Rate", f"{user_data['savings_rate']:.1f}%")
+        cols[0].metric("Savings Rate", f"{user_data['savings_rate']:,.1f}%")
         cols[1].metric("Net Income", f"${user_data['total_income'] - user_data['total_expenses']:,.2f}")
     
     # Financial advice interface
