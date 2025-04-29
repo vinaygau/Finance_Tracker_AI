@@ -1,17 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 import numpy as np
-import yfinance as yf
-from fpdf import FPDF
-from scipy.optimize import minimize
 from supabase import create_client, Client
 from tenacity import retry, stop_after_attempt, wait_fixed
-import google.generativeai as genai
-import json
 import time
 
 # Constants
@@ -20,10 +14,6 @@ DEFAULT_EXPENSE_CATEGORIES = ["Housing", "Food", "Transportation", "Utilities", 
                              "Savings", "Investments", "Gifts", "Other"]
 DEFAULT_PAYMENT_METHODS = ["Cash", "Credit Card", "Debit Card", "Bank Transfer", "Digital Wallet", "Check"]
 DEFAULT_INCOME_SOURCES = ["Salary", "Freelance", "Investments", "Rental", "Business", "Gifts", "Other"]
-RISK_TOLERANCE_OPTIONS = ["Low", "Medium", "High"]
-ASSET_TYPES = ["Stock", "Bond", "ETF", "Mutual Fund", "Crypto", "Real Estate", "Other"]
-FREQUENCY_OPTIONS = ["Daily", "Weekly", "Biweekly", "Monthly", "Quarterly", "Yearly"]
-PERIOD_OPTIONS = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 # Initialize session state
 if 'data_uploaded' not in st.session_state:
@@ -34,8 +24,6 @@ if 'mock_data' not in st.session_state:
     st.session_state.mock_data = False
 if 'tables_created' not in st.session_state:
     st.session_state.tables_created = False
-if 'gemini_initialized' not in st.session_state:
-    st.session_state.gemini_initialized = False
 
 # Set page config as the FIRST Streamlit command
 st.set_page_config(
@@ -82,28 +70,6 @@ custom_css = """
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
         margin-bottom: 10px;
     }
-    .sidebar .sidebar-content {
-        background-color: #f4f7fa;
-        border-right: 2px solid #e0e0e0;
-    }
-    .stPlotlyChart {
-        border-radius: 8px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    .chat-bubble {
-        background-color: #e6f3ff;
-        padding: 10px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-        color: blue;
-    }
-    .info-box {
-        background-color: #e6f3ff;
-        padding: 10px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-        color: #333;
-    }
     .connection-status {
         padding: 8px;
         border-radius: 4px;
@@ -126,64 +92,50 @@ custom_css = """
         border-radius: 4px;
         margin-bottom: 10px;
     }
-    .success-box {
-        background-color: #d4edda;
-        color: #155724;
-        padding: 10px;
-        border-radius: 4px;
-        margin-bottom: 10px;
-    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# Initialize Supabase and Gemini with table creation
+# Initialize Supabase
 def initialize_services():
     # Fetch credentials from secrets or environment variables
     try:
         SUPABASE_URL = st.secrets["SUPABASE_URL"]
         SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-        GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         st.session_state.using_secrets = True
     except (KeyError, FileNotFoundError):
-        SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qkeyjzxnhnosdlxtwsbm.supabase.co")
-        SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFrZXlqenhuaG5vc2RseHR3c2JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4OTAzNzIsImV4cCI6MjA1NzQ2NjM3Mn0.DsxE9-sTfF0hYaSitoq8uExpk7rusH0NlxqXLGy-G2U")
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCgRp8oPIET2Y2tmOiC2PNhKjiV9vNxywU")
+        SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+        SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
         st.session_state.using_secrets = False
-        if not SUPABASE_URL or not SUPABASE_KEY:
-            st.error("Supabase credentials not configured. Using mock data only.")
-            st.session_state.supabase_connected = False
-            st.session_state.mock_data = True
-            return None, None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("Supabase credentials not found. Using mock data only.")
+        st.session_state.supabase_connected = False
+        st.session_state.mock_data = True
+        return None
+
+    @retry(stop=stop_after_attempt(5), wait=wait_fixed(3))
     def init_supabase(url, key):
         try:
             supabase = create_client(url, key)
-            # Test connection by querying a table (or creating if not exists)
-            try:
-                response = supabase.table('expenses').select('id', count='exact').limit(1).execute()
-                if hasattr(response, 'error') and response.error:
-                    if 'relation "public.expenses" does not exist' in str(response.error):
-                        st.warning("Required tables not found. Creating database schema...")
-                        if create_tables(supabase):
-                            st.session_state.tables_created = True
-                            st.success("Database tables created successfully!")
-                        else:
-                            st.error("Failed to create tables. Using mock data.")
-                            return None
+            # Test connection by querying a simple table
+            response = supabase.table('expenses').select('id', count='exact').limit(1).execute()
+            if hasattr(response, 'error') and response.error:
+                if 'relation "public.expenses" does not exist' in str(response.error):
+                    st.warning("Required tables not found. Attempting to create database schema...")
+                    if create_tables(supabase):
+                        st.session_state.tables_created = True
+                        st.success("Database tables created successfully!")
                     else:
-                        st.error(f"Supabase connection error: {response.error}")
+                        st.error("Failed to create tables. Check Supabase configuration.")
                         return None
-                st.session_state.supabase_connected = True
-                return supabase
-            except Exception as e:
-                st.error(f"Error checking tables: {str(e)}")
-                return None
+                else:
+                    st.error(f"Supabase connection error: {response.error.message}")
+                    return None
+            st.session_state.supabase_connected = True
+            return supabase
         except Exception as e:
-            st.error(f"Failed to connect to Supabase: {str(e)}")
-            st.session_state.supabase_connected = False
-            st.session_state.mock_data = True
+            st.error(f"Supabase connection failed: {str(e)}. Retrying...")
             return None
 
     def create_tables(supabase):
@@ -215,64 +167,14 @@ def initialize_services():
                 );
                 """,
                 """
-                CREATE TABLE IF NOT EXISTS public.budgets (
-                    id bigserial PRIMARY KEY,
-                    user_id bigint NOT NULL,
-                    category text NOT NULL,
-                    amount numeric NOT NULL,
-                    period text NOT NULL,
-                    start_date date NOT NULL,
-                    created_at timestamp with time zone DEFAULT now()
-                );
-                """,
-                """
-                CREATE TABLE IF NOT EXISTS public.investments (
-                    id bigserial PRIMARY KEY,
-                    user_id bigint NOT NULL,
-                    asset_name text NOT NULL,
-                    amount numeric NOT NULL,
-                    asset_type text NOT NULL,
-                    risk_level text NOT NULL,
-                    date date NOT NULL,
-                    created_at timestamp with time zone DEFAULT now()
-                );
-                """,
-                """
-                CREATE TABLE IF NOT EXISTS public.goals (
-                    id bigserial PRIMARY KEY,
-                    user_id bigint NOT NULL,
-                    name text NOT NULL,
-                    target_amount numeric NOT NULL,
-                    current_amount numeric DEFAULT 0,
-                    deadline date NOT NULL,
-                    created_at timestamp with time zone DEFAULT now()
-                );
-                """,
-                """
-                CREATE TABLE IF NOT EXISTS public.recurring (
-                    id bigserial PRIMARY KEY,
-                    user_id bigint NOT NULL,
-                    type text NOT NULL,
-                    amount numeric NOT NULL,
-                    category text NOT NULL,
-                    frequency text NOT NULL,
-                    start_date date NOT NULL,
-                    created_at timestamp with time zone DEFAULT now()
-                );
-                """,
-                """
                 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
                 ALTER TABLE public.income ENABLE ROW LEVEL SECURITY;
-                ALTER TABLE public.budgets ENABLE ROW LEVEL SECURITY;
-                ALTER TABLE public.investments ENABLE ROW LEVEL SECURITY;
-                ALTER TABLE public.goals ENABLE ROW LEVEL SECURITY;
-                ALTER TABLE public.recurring ENABLE ROW LEVEL SECURITY;
                 """
             ]
             for sql in tables:
                 result = supabase.rpc('execute', {'sql': sql}).execute()
                 if hasattr(result, 'error') and result.error:
-                    st.error(f"Error executing SQL: {result.error}")
+                    st.error(f"Error executing SQL: {result.error.message}")
                     return False
             return True
         except Exception as e:
@@ -280,30 +182,16 @@ def initialize_services():
             return False
 
     supabase = init_supabase(SUPABASE_URL, SUPABASE_KEY)
-    
-    try:
-        if GEMINI_API_KEY:
-            genai.configure(api_key=GEMINI_API_KEY)
-            gemini_model = genai.GenerativeModel('gemini-1.5-pro')
-            # Test connection with a simple prompt
-            try:
-                gemini_model.generate_content("Test connection")
-                st.session_state.gemini_initialized = True
-            except Exception as e:
-                st.warning(f"Gemini connection test failed: {str(e)}")
-                st.session_state.gemini_initialized = False
-        else:
-            st.warning("Gemini API key not configured. AI features disabled.")
-            gemini_model = None
-            st.session_state.gemini_initialized = False
-    except Exception as e:
-        st.error(f"Failed to initialize Gemini API: {str(e)}")
-        gemini_model = None
-        st.session_state.gemini_initialized = False
+    if not supabase:
+        st.session_state.supabase_connected = False
+        st.session_state.mock_data = True
+        st.warning("Supabase connection failed. Using mock data only.")
+    else:
+        st.session_state.mock_data = False
 
-    return supabase, gemini_model
+    return supabase
 
-supabase, gemini_model = initialize_services()
+supabase = initialize_services()
 
 # Helper Functions
 def display_connection_status():
@@ -322,11 +210,6 @@ def display_connection_status():
                 st.markdown('<div class="warning-box">Using mock data. Some features may be limited.</div>', unsafe_allow_html=True)
             if st.button("Retry Connection", key="retry_connection"):
                 st.rerun()
-        
-        if st.session_state.gemini_initialized:
-            st.markdown('<div class="connection-status connected">✅ Gemini API Ready</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="connection-status disconnected">❌ Gemini API Unavailable</div>', unsafe_allow_html=True)
 
 @st.cache_data(ttl=3600)
 def get_dynamic_categories(table, column, user_id, default_list):
@@ -380,40 +263,6 @@ def generate_mock_data(data_type, rows=5):
             'description': ['Mock data'] * rows,
             'fixed': np.random.choice([True, False], rows)
         }
-    elif data_type == 'budgets':
-        data = {
-            'user_id': [1] * rows,
-            'category': np.random.choice(DEFAULT_EXPENSE_CATEGORIES, rows),
-            'amount': np.random.uniform(100, 1000, rows).round(2),
-            'period': np.random.choice(['Monthly', 'Yearly'], rows),
-            'start_date': pd.date_range(today, periods=rows).strftime('%Y-%m-%d')
-        }
-    elif data_type == 'goals':
-        data = {
-            'user_id': [1] * rows,
-            'name': [f"Goal {i+1}" for i in range(rows)],
-            'target_amount': np.random.uniform(1000, 10000, rows).round(2),
-            'deadline': pd.date_range(today + timedelta(days=30), periods=rows).strftime('%Y-%m-%d'),
-            'current_amount': np.random.uniform(0, 5000, rows).round(2)
-        }
-    elif data_type == 'investments':
-        data = {
-            'user_id': [1] * rows,
-            'asset_name': [f"Asset {i+1}" for i in range(rows)],
-            'amount': np.random.uniform(500, 5000, rows).round(2),
-            'asset_type': np.random.choice(ASSET_TYPES, rows),
-            'risk_level': np.random.choice(RISK_TOLERANCE_OPTIONS, rows),
-            'date': pd.date_range(today - timedelta(days=30), periods=rows).strftime('%Y-%m-%d')
-        }
-    elif data_type == 'recurring':
-        data = {
-            'user_id': [1] * rows,
-            'type': np.random.choice(['Expense', 'Income'], rows),
-            'amount': np.random.uniform(50, 500, rows).round(2),
-            'category': np.random.choice(DEFAULT_EXPENSE_CATEGORIES, rows),
-            'frequency': np.random.choice(FREQUENCY_OPTIONS, rows),
-            'start_date': pd.date_range(today, periods=rows).strftime('%Y-%m-%d')
-        }
     return pd.DataFrame(data)
 
 def calculate_financial_metrics(expenses_df, income_df):
@@ -448,70 +297,7 @@ def create_financial_charts(expenses_df, income_df):
         income_trend = income_df.groupby('date')['amount'].sum().reset_index()
         charts['income_trend'] = px.line(income_trend, x='date', y='amount', title="Income Trends",
                                        labels={'amount': 'Amount ($)', 'date': 'Date'})
-    if not expenses_df.empty and not income_df.empty and 'amount' in expenses_df.columns and 'amount' in income_df.columns and 'date' in expenses_df.columns and 'date' in income_df.columns:
-        cash_flow = pd.merge(expenses_df.groupby('date')['amount'].sum().reset_index(name='expenses'),
-                             income_df.groupby('date')['amount'].sum().reset_index(name='income'),
-                             on='date', how='outer').fillna(0)
-        cash_flow['net'] = cash_flow['income'] - cash_flow['expenses']
-        charts['cash_flow'] = px.line(cash_flow, x='date', y=['income', 'expenses', 'net'], title="Cash Flow",
-                                    labels={'value': 'Amount ($)', 'date': 'Date', 'variable': 'Type'})
     return charts
-
-def generate_pdf_report(report_type, user_id, start_date, end_date):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"{report_type} Financial Report", ln=1, align="C")
-    try:
-        expenses_df = get_financial_data('expenses', user_id, (start_date, end_date))
-        income_df = get_financial_data('income', user_id, (start_date, end_date))
-        metrics = calculate_financial_metrics(expenses_df, income_df)
-        pdf.cell(200, 10, txt=f"Period: {start_date} to {end_date}", ln=1)
-        pdf.cell(200, 10, txt=f"Total Income: ${metrics['total_income']:,.2f}", ln=1)
-        pdf.cell(200, 10, txt=f"Total Expenses: ${metrics['total_expenses']:,.2f}", ln=1)
-        pdf.cell(200, 10, txt=f"Net Income: ${metrics['net_income']:,.2f}", ln=1)
-        pdf.cell(200, 10, txt=f"Savings Rate: {metrics['savings_rate']:.1f}%", ln=1)
-        if not expenses_df.empty and 'category' in expenses_df.columns and 'amount' in expenses_df.columns:
-            pdf.cell(200, 10, txt="Expense Breakdown:", ln=1)
-            for cat, amt in expenses_df.groupby('category')['amount'].sum().items():
-                pdf.cell(200, 10, txt=f"{cat}: ${amt:,.2f}", ln=1)
-        if not income_df.empty and 'source' in income_df.columns and 'amount' in income_df.columns:
-            pdf.cell(200, 10, txt="Income Breakdown:", ln=1)
-            for src, amt in income_df.groupby('source')['amount'].sum().items():
-                pdf.cell(200, 10, txt=f"{src}: ${amt:,.2f}", ln=1)
-        return pdf.output(dest='S').encode('latin1')
-    except Exception as e:
-        st.error(f"Error generating report: {str(e)}")
-        return None
-
-def get_financial_advice(user_data, query):
-    if not st.session_state.gemini_initialized:
-        return "Financial advice unavailable. Gemini API not initialized. Please check your API key or configuration."
-    
-    try:
-        prompt = f"""
-        You are a highly experienced financial advisor with a deep understanding of personal finance. Provide detailed, actionable advice based on the following:
-
-        User Financial Data:
-        - Monthly Income: ${user_data.get('total_income', 0):,.2f}
-        - Monthly Expenses: ${user_data.get('total_expenses', 0):,.2f}
-        - Savings Rate: {user_data.get('savings_rate', 0):.1f}%
-        - Expense Categories: {', '.join(user_data.get('expense_categories', [])) or 'None'}
-        - Income Sources: {', '.join(user_data.get('income_sources', [])) or 'None'}
-
-        User Query: {query}
-
-        Provide a response with:
-        - A concise summary of the user's financial situation.
-        - 3-5 specific, actionable recommendations in bullet points, tailored to the query.
-        - A brief explanation of why each recommendation is suitable, considering the user's data.
-        - Use a professional yet approachable tone.
-        """
-        response = gemini_model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        st.error(f"Error getting financial advice: {str(e)}")
-        return "Unable to provide advice at this time due to an internal error. Please try again later."
 
 # Dynamic Categories
 current_user_id = 1
@@ -528,14 +314,6 @@ with st.sidebar:
         "🏠 Dashboard",
         "💸 Expenses",
         "💵 Income",
-        "📊 Budgets",
-        "🎯 Goals",
-        "📈 Analytics",
-        "📑 Reports",
-        "💰 Investments",
-        "🔄 Recurring",
-        "🧮 Financial Workbench",
-        "🤖 Financial Advisor"
     ]
     selected_page = st.radio("Navigation", menu_options, label_visibility="hidden")
     st.markdown("---")
@@ -573,9 +351,7 @@ with st.sidebar:
 
 # Main Content
 st.markdown("<div class='main-header'>ProFinance Manager</div>", unsafe_allow_html=True)
-current_page = selected_page.split()[1] if selected_page != "🧮 Financial Workbench" else "Financial Workbench"
-if selected_page == "🤖 Financial Advisor":
-    current_page = "Financial Advisor"
+current_page = selected_page.split()[1]
 
 # Page Routing
 if current_page == "Dashboard":
@@ -595,10 +371,6 @@ if current_page == "Dashboard":
     with cols[1]: st.markdown("<div class='metric-box'>", unsafe_allow_html=True); st.metric("Total Expenses", f"${metrics['total_expenses']:,.2f}"); st.markdown("</div>", unsafe_allow_html=True)
     with cols[2]: st.markdown("<div class='metric-box'>", unsafe_allow_html=True); st.metric("Net Income", f"${metrics['net_income']:,.2f}"); st.markdown("</div>", unsafe_allow_html=True)
     with cols[3]: st.markdown("<div class='metric-box'>", unsafe_allow_html=True); st.metric("Savings Rate", f"{metrics['savings_rate']:.1f}%"); st.markdown("</div>", unsafe_allow_html=True)
-    st.subheader("Quick Insights")
-    if metrics['savings_rate'] < 10: st.warning("Your savings rate is low. Consider reducing discretionary spending or increasing income.")
-    if metrics['expense_ratio'] > 80: st.warning("High expense ratio! More than 80% of your income is going to expenses.")
-    if metrics['fixed_expenses'] / metrics['total_income'] > 0.5 and metrics['total_income'] > 0: st.warning("Your fixed expenses are high (>50% of income). Look for ways to reduce recurring costs.")
     st.subheader("Recent Transactions")
     if not expenses_df.empty or not income_df.empty:
         recent_expenses = expenses_df.sort_values('date', ascending=False).head(3) if 'date' in expenses_df.columns else pd.DataFrame()
@@ -640,13 +412,13 @@ elif current_page == "Expenses":
     col1, col2 = st.columns(2)
     start_date = col1.date_input("Start Date", datetime.now() - timedelta(days=30))
     end_date = col2.date_input("End Date", datetime.now())
-    expenses_df = get_financial_data('expenses', current_user_id, (start_date, end_date))
+    expenses_df = get_financial_data('expenses', current_user_id, (-receptor_date, end_date))
     if st.session_state.mock_data and expenses_df.empty: expenses_df = generate_mock_data('expenses', rows=15)
     if not expenses_df.empty and 'amount' in expenses_df.columns:
         total_spent = expenses_df['amount'].sum()
         avg_daily = total_spent / ((end_date - start_date).days + 1) if (end_date - start_date).days + 1 > 0 else 0
         st.markdown(f"**Total Spent:** ${total_spent:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(expenses_df)}")
-        tab1, tab2, tab3 = st.tabs(["📊 Overview", "📅 Trends", "🔍 Details"])
+        tab1, tab2 = st.tabs(["📊 Overview", "📅 Trends"])
         with tab1:
             if 'category' in expenses_df.columns and 'amount' in expenses_df.columns:
                 cat_data = expenses_df.groupby('category')['amount'].sum().reset_index()
@@ -654,4 +426,60 @@ elif current_page == "Expenses":
                 st.plotly_chart(fig1, use_container_width=True)
             if 'payment_method' in expenses_df.columns and 'amount' in expenses_df.columns:
                 pm_data = expenses_df.groupby('payment_method')['amount'].sum().reset_index()
-                fig2 = px.bar(pm_data, x='payment_method', y='amount', title="Expenses by Payment Method",
+                fig2 = px.bar(pm_data, x='payment_method', y='amount', title="Expenses by Payment Method")
+                st.plotly_chart(fig2, use_container_width=True)
+        with tab2:
+            if 'date' in expenses_df.columns and 'amount' in expenses_df.columns:
+                trend_data = expenses_df.groupby('date')['amount'].sum().reset_index()
+                fig3 = px.line(trend_data, x='date', y='amount', title="Expense Trends")
+                st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("No expenses found for the selected period.")
+
+elif current_page == "Income":
+    st.markdown("<div class='section-header'>💵 Income</div>", unsafe_allow_html=True)
+    with st.expander("➕ Add New Income", expanded=True):
+        with st.form("income_form", clear_on_submit=True):
+            cols = st.columns(2)
+            amount = cols[0].number_input("Amount ($)", min_value=0.01, step=0.01)
+            date = cols[1].date_input("Date", datetime.now())
+            source = st.selectbox("Source", INCOME_SOURCES + ["➕ Add New"])
+            if source == "➕ Add New": source = st.text_input("New Source Name")
+            description = st.text_input("Description (Optional)")
+            fixed = st.checkbox("Fixed Income (recurring)")
+            submitted = st.form_submit_button("Add Income")
+            if submitted:
+                if amount <= 0: st.error("Amount must be greater than 0")
+                else:
+                    if st.session_state.supabase_connected:
+                        try:
+                            data = {'user_id': current_user_id, 'amount': float(amount), 'source': source, 'date': date.strftime('%Y-%m-%d'),
+                                    'description': description if description else None, 'fixed': fixed}
+                            supabase.table('income').insert(data).execute()
+                            st.success("Income added successfully!")
+                            time.sleep(1); st.rerun()
+                        except Exception as e: st.error(f"Error adding income: {str(e)}")
+                    else: st.warning("Income not saved (database not connected)")
+    st.subheader("Income Analysis")
+    col1, col2 = st.columns(2)
+    start_date = col1.date_input("Start Date", datetime.now() - timedelta(days=30))
+    end_date = col2.date_input("End Date", datetime.now())
+    income_df = get_financial_data('income', current_user_id, (start_date, end_date))
+    if st.session_state.mock_data and income_df.empty: income_df = generate_mock_data('income', rows=15)
+    if not income_df.empty and 'amount' in income_df.columns:
+        total_income = income_df['amount'].sum()
+        avg_daily = total_income / ((end_date - start_date).days + 1) if (end_date - start_date).days + 1 > 0 else 0
+        st.markdown(f"**Total Income:** ${total_income:,.2f} | **Average Daily:** ${avg_daily:,.2f} | **Transactions:** {len(income_df)}")
+        tab1, tab2 = st.tabs(["📊 Overview", "📅 Trends"])
+        with tab1:
+            if 'source' in income_df.columns and 'amount' in income_df.columns:
+                source_data = income_df.groupby('source')['amount'].sum().reset_index()
+                fig1 = px.pie(source_data, values='amount', names='source', title="Income Distribution by Source")
+                st.plotly_chart(fig1, use_container_width=True)
+        with tab2:
+            if 'date' in income_df.columns and 'amount' in income_df.columns:
+                trend_data = income_df.groupby('date')['amount'].sum().reset_index()
+                fig2 = px.line(trend_data, x='date', y='amount', title="Income Trends")
+                st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No income found for the selected period.")
